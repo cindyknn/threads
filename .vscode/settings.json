@@ -1,0 +1,11 @@
+{
+	"editor.rulers": [
+		80
+	],
+	"editor.detectIndentation": false,
+	"editor.tabSize": 8,
+	"editor.insertSpaces": false,
+	"terminal.integrated.scrollback": 10000,
+	"C_Cpp.debugShortcut": false,
+	"C_Cpp.default.cStandard": "gnu11"
+}
