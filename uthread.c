@@ -1,3 +1,7 @@
+/*
+ * Cindy Nguyen (cn32)
+ */
+
 #define _GNU_SOURCE	// Enable the use of RTLD_NEXT
 
 #include <sys/select.h>
@@ -110,12 +114,16 @@ void
 uthr_block_SIGPROF(sigset_t *old_setp)
 {
 	// (Your code goes here.)
+	sigprocmask(SIG_BLOCK, &SIGPROF_set, &old_setp);
+
 }
 
 void
 uthr_set_sigmask(const sigset_t *setp)
 {
 	// (Your code goes here.)
+	sigset_t old_set;
+	sigprocmask(SIG_SETMASK, &setp, &old_set);
 }
 
 void *
@@ -153,6 +161,30 @@ uthr_to_zombie(struct uthr *td)
 	}
 
 	// (Your code goes here.)
+	// Remove the thread from runq.
+	struct uthr *runq_prev = td->prev;
+	struct uthr *runq_next = td->next;
+	runq_prev->next = runq_next;
+	runq_next->prev = runq_prev;
+	
+	// Change the state to zombie.
+	td->state = UTHR_ZOMBIE;
+	if (td->joiner != NULL) {
+		struct uthr *joiner = td->joiner;
+		joiner->state = UTHR_RUNNABLE;
+		// Insert joiner into runq.
+		joiner->prev = runq.prev;
+		joiner->next = &runq;
+		(joiner->prev)->next = joiner;
+		runq.prev = joiner;
+	} else if (td->detached) {
+		// Insert thread into reapq.
+		td->prev = reapq.prev;
+		td->next = &reapq;
+		(td->prev)->next = td;
+		reapq.prev = td;
+	}
+	
 }
 
 /**
@@ -172,6 +204,22 @@ uthr_to_free(struct uthr *td)
 	assert(td->state == UTHR_ZOMBIE);
 
 	// (Your code goes here.)
+	// Free thread's stack.
+	uthr_intern_free(td->stack_base);
+	
+	// Move thread from reapq to freeq.
+	struct uthr *reapq_prev = td->prev;
+	struct uthr *reapq_next = td->next;
+	reapq_prev->next = reapq_next;
+	reapq_next->prev = reapq_prev;
+	td->prev = freeq.prev;
+	td->next = &freeq;
+	(td->prev)->next = td;
+	freeq.prev = td;
+
+	// Change thread's state to free.
+	td->state = UTHR_FREE;
+
 }
 
 /**
@@ -204,6 +252,14 @@ uthr_start(int tidx)
 	assert(sigismember(&old_set, SIGPROF));
 
 	// (Your code goes here.)
+	// Call the thread's start routine, saves return value in the thread structure.
+	td->ret_val = td->start_routine(td->argp);
+	
+	// Restores the original signal mask.
+	sigprocmask(SIG_SETMASK, &old_set, NULL);
+	// Change state to zombie.
+	//td->state = UTHR_ZOMBIE;
+	uthr_to_zombie(td);
 }
 
 int
@@ -211,6 +267,28 @@ pthread_create(pthread_t *restrict tidp, const pthread_attr_t *restrict attrp,
     void *(*start_routine)(void *restrict), void *restrict argp)
 {
 	// (Your code goes here.)
+	//Take a thread from freeq and move it to runq.
+	struct uthr *td = runq.prev;
+	struct uthr *freeq_prev = td->prev;
+	struct uthr *freeq_next = td->next;
+	freeq_prev->next = freeq_next;
+	freeq_next->prev = freeq_prev;
+	td->prev = runq.prev;
+	td->next = &runq;
+	(td->prev)->next = td;
+	runq.prev = td;
+
+	//Create stack_base, set start_routine & argp, state = Runnable, detached = 0
+	td->stack_base = uthr_intern_malloc(UTHR_STACK_SIZE);
+	td->start_routine = start_routine;
+	td->argp = argp;
+	td->state = UTHR_RUNNABLE;
+	td->joiner = NULL;
+	td->detached = 0;
+
+	// Call uthr_start?
+	uthr_start(td - uthr_array);
+
 	return (0);
 }
 
@@ -218,6 +296,8 @@ int
 pthread_detach(pthread_t tid)
 {
 	// (Your code goes here.)
+	// Change detached to true.
+	uthr_array[tid].detached = true;
 	return (0);
 }
 
@@ -231,6 +311,10 @@ void
 pthread_exit(void *retval)
 {
 	// (Your code goes here.)
+	// Set retval to current thread's return value.
+	retval = curr_uthr->ret_val;
+	// Changes current thread to zombie.
+	uthr_to_zombie(curr_uthr);
 
 	/*
 	 * Since pthread_exit is declared as a function that never
@@ -244,6 +328,12 @@ int
 pthread_join(pthread_t tid, void **retval)
 {
 	// (Your code goes here.)
+
+	//convert runnable to joining
+	//put child thread to reapq: uthr_to_zombie
+	//block?
+	
+
 	return (0);
 }
 
@@ -312,6 +402,57 @@ uthr_check_blocked(bool wait)
 	uthr_assert_SIGPROF_blocked();
 
 	// (Your code goes here.)
+	// Copy file descriptor sets
+	fd_set ready_for_read = fd_state.read_set;
+	fd_set ready_for_write = fd_state.write_set;
+	
+	// Will not block because of 0 timeout
+	int nready = select(fd_state.maxfd + 1, &ready_for_read, &ready_for_write, NULL, timeoutp);
+	
+	// If nready > 0, figure out which file descriptors are ready and unblock appropriate threads
+	// Note that a thread can only ever be blocked on one file descriptor at a time
+	if (nready < 0) {
+		// Handle error: errno EAGAIN,EWOULD
+		printf("error: nready < 0\n");
+	} else {
+		struct uthr *head = &blockedq;
+		struct uthr *curr = blockedq.next;
+		while(curr != head) {
+			if (curr->state == UTHR_BLOCKED) {
+				if ((FD_ISSET(curr->fd, &ready_for_read) && curr->op == UTHR_OP_READ) || (FD_ISSET(curr->fd, &ready_for_write) && curr->op == UTHR_OP_WRITE)) {
+					//change state, add to runq, remove from blockedq
+					curr->state = UTHR_RUNNABLE;
+					struct uthr *blocked_prev = curr->prev;
+					struct uthr *blocked_next = curr->next;
+					blocked_prev->next = blocked_next;
+					blocked_next->prev = blocked_prev;
+					curr->prev = runq.prev;
+					curr->next = &runq;
+					(curr->prev)->next = curr;
+					runq.prev = curr;
+					
+					
+					//decrement readers/writers, if that int gets to 0 then FD_CLR that fd from read_set/write_set
+					if(curr->op == UTHR_OP_READ) {
+						fd_state.blocked[curr->fd].readers -= 1;
+						if(fd_state.blocked[curr->fd].readers == 0) {
+							FD_CLR(curr->fd, &(fd_state.read_set));
+						}
+					} else if (curr->op == UTHR_OP_WRITE) {
+						fd_state.blocked[curr->fd].writers -= 1;
+						if(fd_state.blocked[curr->fd].writers == 0) {
+							FD_CLR(curr->fd, &(fd_state.write_set));
+						}
+					}
+
+					curr = blocked_next;
+
+				} else {
+					curr = curr->next;
+				}
+			}
+		}			
+	}
 }
 
 /**
@@ -385,6 +526,9 @@ uthr_init(void)
 	 * SIGPROF_set must be initialized before calling uthr_lookup_symbol().
 	 */
 	// (Your code goes here.)
+	sigemptyset(&SIGPROF_set);
+	sigaddset(&SIGPROF_set, SIGPROF);
+//block Sigprof here at start uthr_init
 
 	uthr_lookup_symbol((void *)&mallocp, "malloc");
 	uthr_lookup_symbol((void *)&freep, "free");
@@ -407,6 +551,8 @@ uthr_init(void)
 	 * running.
 	 */
 	// (Your code goes here.)
+
+//set prev and next to itself for all 4 queues!!!
 	 
 	uthr_init_fd_state();
 
@@ -414,6 +560,7 @@ uthr_init(void)
 	 * Set up the SIGPROF signal handler.
 	 */
 	// (Your code goes here.)
+	//sigaction(SA_RESTART, _);
 	 
 	/*
 	 * Configure the interval timer for thread scheduling.
