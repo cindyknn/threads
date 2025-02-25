@@ -19,6 +19,12 @@ static void
 unix_set_fd_NONBLOCK(int fd)
 {
 	// (Your code goes here.)
+	// Sets fd to non-blocking mode.
+	int err = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK );
+	// Error checking.
+	if (err == -1) {
+		printf("unix_set_fd_NONBLOCK() fail.");
+	}
 }
 
 /**
@@ -40,8 +46,12 @@ socket(int domain, int type, int protocol)
 	if (socketp == NULL)
 		uthr_lookup_symbol((void *)&socketp, "socket");
 	s = socketp(domain, type, protocol);
-	if (s != -1)
+	if (s != -1) {
 		unix_set_fd_NONBLOCK(s);
+	} else {
+		errno = EAGAIN;
+	}
+
 	return (s);
 }
 
@@ -63,7 +73,14 @@ accept(int s, struct sockaddr *addr, socklen_t *addrlen)
 	int s_conn;
 
 	// (Your code goes here.)
-
+	if (acceptp == NULL)
+		uthr_lookup_symbol((void *)&acceptp, "accept");
+	s_conn = acceptp(s, addr, addrlen);
+	if (s_conn != -1) {
+		unix_set_fd_NONBLOCK(s_conn);
+	} else {
+		errno = EAGAIN;
+	}
 	return (s_conn);
 }
 
@@ -84,7 +101,15 @@ read(int fd, void *buf, size_t count)
 	int rc;
 
 	// (Your code goes here.)
-
+	if (readp == NULL)
+		uthr_lookup_symbol((void *)&readp, "read");
+	rc = readp(fd, buf, count);
+	if (rc != -1) {
+		unix_set_fd_NONBLOCK(fd);
+	} else if (errno == EAGAIN) {
+		uthr_block_on_fd(fd, UTHR_OP_READ);
+	}
+	
 	return (rc);
 }
 
@@ -105,6 +130,14 @@ write(int fd, const void *buf, size_t count)
 	int rc;
 
 	// (Your code goes here.)
+	if (writep == NULL)
+		uthr_lookup_symbol((void *)&writep, "write");
+	rc = writep(fd, buf, count);
+	if (rc != -1) {
+		unix_set_fd_NONBLOCK(fd);
+	} else if (errno == EAGAIN) {
+		uthr_block_on_fd(fd, UTHR_OP_WRITE);
+	}
 
 	return (rc);
 }
