@@ -20,11 +20,12 @@ unix_set_fd_NONBLOCK(int fd)
 {
 	// (Your code goes here.)
 	// Sets fd to non-blocking mode.
-	int err = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK );
+	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK );
+	// int err = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK );
 	// Error checking.
-	if (err == -1) {
-		printf("unix_set_fd_NONBLOCK() fail.");
-	}
+	// if (err == -1) {
+	// 	printf("unix_set_fd_NONBLOCK() fail.");
+	// }
 }
 
 /**
