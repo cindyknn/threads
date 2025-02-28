@@ -115,25 +115,25 @@ uthr_assert_SIGPROF_blocked(void)
 	assert(sigismember(&old_set, SIGPROF));
 }
 
-/**
- * This function blocks the SIGPROF signals and saves the old signal set to
- * old_setp.
- */
 void
 uthr_block_SIGPROF(sigset_t *old_setp)
 {
 	// (Your code goes here.)
-	sigprocmask(SIG_BLOCK, &SIGPROF_set, old_setp);
+	// Block SIGPROF set and save old signal set to old_setp.
+	if (sigprocmask(SIG_BLOCK, &SIGPROF_set, old_setp) == -1)
+		uthr_exit_errno("sigprocmask");
 }
 
-/**
- * This function sets the sigmask to setp.
- */
 void
 uthr_set_sigmask(const sigset_t *setp)
 {
 	// (Your code goes here.)
-	sigprocmask(SIG_SETMASK, setp, NULL);
+	int save_errno = errno;
+	// Set the sigmask to setp.
+	if (sigprocmask(SIG_SETMASK, setp, NULL) == -1)
+		uthr_exit_errno("sigprocmask");
+	// Restore errno value.
+	errno = save_errno;
 }
 
 void *
@@ -152,6 +152,8 @@ uthr_intern_free(void *ptr)
 
 /**
  * Remove the given thread from its current queue.
+ *
+ * @param td The thread that needs to be removed from its current queue.
  */
 void
 uthr_removeq(struct uthr *td)
@@ -168,6 +170,9 @@ uthr_removeq(struct uthr *td)
 
 /**
  * Insert the given thread to the end of the given queue.
+ *
+ * @param td The thread that needs to be inserted into the queue.
+ * @param queue The queue that td needs to be inserted into.
  */
 void
 uthr_insertq(struct uthr *td, struct uthr *queue)
@@ -207,10 +212,11 @@ uthr_to_zombie(struct uthr *td)
 
 	// Change the state to zombie.
 	td->state = UTHR_ZOMBIE;
+	// Check if td has a joiner, or is detached.
 	if (td->joiner != NULL) {
 		struct uthr *joiner = td->joiner;
+		// Change joiner's state to Runnable. Insert joiner into runq.
 		joiner->state = UTHR_RUNNABLE;
-		// Insert joiner into runq.
 		uthr_insertq(joiner, &runq);
 	} else if (td->detached) {
 		// Insert thread into reapq.
@@ -292,9 +298,11 @@ pthread_create(pthread_t *restrict tidp, const pthread_attr_t *restrict attrp,
     void *(*start_routine)(void *restrict), void *restrict argp)
 {
 	// (Your code goes here.)
+	// Block SIGPROF set.
 	sigset_t old_set;
 	uthr_block_SIGPROF(&old_set);
 
+	// Check if attrp is not NULL then return error ENOTSUP.
 	if (attrp != NULL) {
 		uthr_set_sigmask(&old_set);
 		return ENOTSUP;
@@ -315,10 +323,6 @@ pthread_create(pthread_t *restrict tidp, const pthread_attr_t *restrict attrp,
 		return EAGAIN;
 	}
 
-	// Move td to runq.
-	uthr_removeq(td);
-	uthr_insertq(td, &runq);
-
 	// Initialize the context of td.
 	getcontext(&td->uctx);
 	td->uctx.uc_stack.ss_sp = td->stack_base;
@@ -337,6 +341,11 @@ pthread_create(pthread_t *restrict tidp, const pthread_attr_t *restrict attrp,
 	// Pass index of td in uthr_array to tidp.
 	*tidp = td - uthr_array;
 
+	// Move td to runq.
+	uthr_removeq(td);
+	uthr_insertq(td, &runq);
+
+	// Restores the original signal mask.
 	uthr_set_sigmask(&old_set);
 
 	return (0);
@@ -345,6 +354,7 @@ pthread_create(pthread_t *restrict tidp, const pthread_attr_t *restrict attrp,
 int
 pthread_detach(pthread_t tid)
 {
+	// Block SIGPROF set.
 	sigset_t old_set;
 	uthr_block_SIGPROF(&old_set);
 
@@ -362,6 +372,7 @@ pthread_detach(pthread_t tid)
 	// Change detached to true.
 	uthr_array[tid].detached = true;
 
+	// Restores the original signal mask.
 	uthr_set_sigmask(&old_set);
 
 	return (0);
@@ -378,7 +389,7 @@ pthread_exit(void *retval)
 {
 	// (Your code goes here.)
 
-	// Block SIGPROF.
+	// Block SIGPROF set.
 	sigset_t old_set;
 	uthr_block_SIGPROF(&old_set);
 
@@ -406,10 +417,11 @@ int
 pthread_join(pthread_t tid, void **retval)
 {
 	// (Your code goes here.)
+	// Block SIGPROF set.
 	sigset_t old_set;
 	uthr_block_SIGPROF(&old_set);
 
-	// Check for errors ESRCH, EINVAL, EDEADLK.
+	// Check for error ESRCH.
 	if (tid >= NUTHR) {
 		uthr_set_sigmask(&old_set);
 		return ESRCH;
@@ -419,6 +431,7 @@ pthread_join(pthread_t tid, void **retval)
 		return ESRCH;
 	}
 
+	// Check for error EINVAL.
 	if (uthr_array[tid].detached) {
 		uthr_set_sigmask(&old_set);
 		return EINVAL;
@@ -428,6 +441,7 @@ pthread_join(pthread_t tid, void **retval)
 		return EINVAL;
 	}
 
+	// Check for error EDEADLK.
 	if (&uthr_array[tid] == curr_uthr) {
 		uthr_set_sigmask(&old_set);
 		return EDEADLK;
@@ -462,6 +476,7 @@ pthread_join(pthread_t tid, void **retval)
 	// Free the thread.
 	uthr_to_free(&uthr_array[tid]);
 
+	// Restores the original signal mask.
 	uthr_set_sigmask(&old_set);
 
 	return (0);
@@ -475,6 +490,8 @@ sched_yield(void)
 	// Causes the calling thread to relinquish the CPU.
 	// The thread is moved to the end of the queue for its static
 	// priority and a new thread gets to run.
+
+	// Block SIGPROF set.
 	sigset_t old_set;
 	uthr_block_SIGPROF(&old_set);
 
@@ -483,6 +500,7 @@ sched_yield(void)
 		uthr_exit_errno("swapcontext");
 	}
 
+	// Restores the original signal mask.
 	uthr_set_sigmask(&old_set);
 
 	return (0);
@@ -525,6 +543,7 @@ uthr_block_on_fd(int fd, enum uthr_op op)
 
 	// (Your code goes here.)
 
+	// Block SIGPROF set.
 	sigset_t old_set;
 	uthr_block_SIGPROF(&old_set);
 
@@ -564,6 +583,7 @@ uthr_block_on_fd(int fd, enum uthr_op op)
 		uthr_exit_errno("swapcontext");
 	}
 
+	// Restores the original signal mask.
 	uthr_set_sigmask(&old_set);
 }
 
@@ -601,48 +621,43 @@ uthr_check_blocked(bool wait)
 	// blocked on one file descriptor at a time.
 	struct uthr *head = &blockedq;
 	struct uthr *curr = blockedq.next;
-	if (nready < 0) {
+	if (nready > 0) {
 		while (curr != head) {
-			if (curr->state == UTHR_BLOCKED) {
-				if ((FD_ISSET(curr->fd, &ready_for_read) &&
-					curr->op == UTHR_OP_READ) ||
-				    (FD_ISSET(curr->fd, &ready_for_write) &&
-					curr->op == UTHR_OP_WRITE)) {
-					// Change state to Runnable, remove from
-					// blockedq, add to runq.
-					curr->state = UTHR_RUNNABLE;
-					uthr_removeq(curr);
-					uthr_insertq(curr, &runq);
-					struct uthr *blocked_next = curr->next;
+			struct uthr *curr_next = curr->next;
 
-					// Decrement readers/writers, if that
-					// int gets to 0 then FD_CLR that fd
-					// from read_set/write_set.
-					if (curr->op == UTHR_OP_READ) {
-						fd_state.blocked[curr->fd]
-						    .readers -= 1;
-						if (fd_state.blocked[curr->fd]
-							.readers == 0) {
-							FD_CLR(curr->fd,
-							    &fd_state.read_set);
-						}
-					} else if (curr->op == UTHR_OP_WRITE) {
-						fd_state.blocked[curr->fd]
-						    .writers -= 1;
-						if (fd_state.blocked[curr->fd]
-							.writers == 0) {
-							FD_CLR(curr->fd,
-							    &fd_state
-								 .write_set);
-						}
+			// Check if the fd is ready for read or write.
+			if ((FD_ISSET(curr->fd, &ready_for_read) &&
+				curr->op == UTHR_OP_READ) ||
+			    (FD_ISSET(curr->fd, &ready_for_write) &&
+				curr->op == UTHR_OP_WRITE)) {
+
+				// Decrement readers/writers, if that
+				// int gets to 0 then FD_CLR that fd
+				// from read_set/write_set.
+				if (curr->op == UTHR_OP_READ) {
+					fd_state.blocked[curr->fd].readers -= 1;
+					if (fd_state.blocked[curr->fd]
+						.readers == 0) {
+						FD_CLR(curr->fd,
+						    &fd_state.read_set);
 					}
-
-					curr = blocked_next;
-
 				} else {
-					curr = curr->next;
+					fd_state.blocked[curr->fd].writers -= 1;
+					if (fd_state.blocked[curr->fd]
+						.writers == 0) {
+						FD_CLR(curr->fd,
+						    &fd_state.write_set);
+					}
 				}
+
+				// Change state to Runnable, remove from
+				// blockedq, add to runq.
+				uthr_removeq(curr);
+				uthr_insertq(curr, &runq);
+				curr->state = UTHR_RUNNABLE;
 			}
+			// Update curr to the next blocked thread.
+			curr = curr_next;
 		}
 	}
 }
@@ -676,6 +691,7 @@ uthr_scheduler(void)
 			// thread by resuming its ucontext.
 			curr_uthr = runq.next;
 
+			// Swap context to curr_uthr.
 			if (swapcontext(&sched_uctx, &curr_uthr->uctx) < 0) {
 				uthr_exit_errno("swapcontext");
 			}
@@ -760,25 +776,28 @@ uthr_init(void)
 	if (sigaddset(&SIGPROF_set, SIGPROF) == -1)
 		uthr_exit_errno("sigaddset");
 
+	// Lookup the symbols for malloc and free.
+	uthr_lookup_symbol((void *)&mallocp, "malloc");
+	uthr_lookup_symbol((void *)&freep, "free");
+
 	// Block SIGPROF signals.
 	sigset_t old_set;
 	uthr_block_SIGPROF(&old_set);
-
-	uthr_lookup_symbol((void *)&mallocp, "malloc");
-	uthr_lookup_symbol((void *)&freep, "free");
 
 	/*
 	 * Initialize the scheduler context using the above sched_stack.
 	 */
 	// (Your code goes here.)
-	getcontext(&sched_uctx);
+	if (getcontext(&sched_uctx) < 0)
+		uthr_exit_errno("getcontext");
 	sched_uctx.uc_stack.ss_sp = sched_stack;
 	sched_uctx.uc_stack.ss_size = UTHR_STACK_SIZE;
 	sched_uctx.uc_link = NULL;
 	sched_uctx.uc_sigmask = SIGPROF_set;
 	makecontext(&sched_uctx, (void (*)())uthr_scheduler, 0);
 
-	// For all 4 queues, set prev and next struct entries to itself.
+	// For all 4 queues, initialize the dummy head by setting prev and next
+	// struct entries to itself.
 	runq.prev = &runq;
 	runq.next = &runq;
 	blockedq.prev = &blockedq;
@@ -814,7 +833,7 @@ uthr_init(void)
 	 */
 	// (Your code goes here.)
 	// Create and initialize a new struct sigaction.
-	struct sigaction action;
+	static struct sigaction action;
 	action.sa_handler = uthr_timer_handler;
 	action.sa_flags = SA_RESTART;
 	action.sa_mask = SIGPROF_set;
@@ -825,8 +844,10 @@ uthr_init(void)
 	 * Configure the interval timer for thread scheduling.
 	 */
 	// (Your code goes here.)
-	setitimer(ITIMER_PROF, &quantum, NULL);
+	if (setitimer(ITIMER_PROF, &quantum, NULL) < 0)
+		uthr_exit_errno("setitimer");
 
+	// Restores the original signal mask.
 	uthr_set_sigmask(&old_set);
 }
 
@@ -861,6 +882,7 @@ uthr_lookup_symbol(void **addrp, const char *symbol)
 	}
 
 	// (Your code goes here.)
+	// Restores the original signal mask.
 	uthr_set_sigmask(&old_set);
 }
 

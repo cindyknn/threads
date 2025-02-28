@@ -20,12 +20,7 @@ unix_set_fd_NONBLOCK(int fd)
 {
 	// (Your code goes here.)
 	// Sets fd to non-blocking mode.
-	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
-	// int err = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK );
-	// Error checking.
-	// if (err == -1) {
-	// 	printf("unix_set_fd_NONBLOCK() fail.");
-	// }
+	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
 }
 
 /**
@@ -72,22 +67,33 @@ accept(int s, struct sockaddr *addr, socklen_t *addrlen)
 	int s_conn;
 
 	// (Your code goes here.)
+
+	// Lookup the symbol for accept.
 	if (acceptp == NULL)
 		uthr_lookup_symbol((void *)&acceptp, "accept");
 	unix_set_fd_NONBLOCK(s);
 
+	// Keep looping until a connection is accepted.
 	for (;;) {
 		int save_errno = errno;
 		s_conn = acceptp(s, addr, addrlen);
-		if (s_conn == -1) {
+		// Check if a connection is accepted.
+		if (s_conn < 0) {
 			if (errno == EWOULDBLOCK || errno == EAGAIN) {
+				// Block on fd for read operation.
 				errno = save_errno;
 				uthr_block_on_fd(s, UTHR_OP_READ);
 			} else {
 				return -1;
 			}
+		} else {
+			// Break out of the infinite loop.
+			break;
 		}
 	}
+	// Set the new socket to non-blocking mode.
+	if (s_conn != -1)
+		unix_set_fd_NONBLOCK(s_conn);
 
 	return (s_conn);
 }
@@ -109,14 +115,20 @@ read(int fd, void *buf, size_t count)
 	int rc;
 
 	// (Your code goes here.)
+
+	// Lookup the symbol for read.
 	if (readp == NULL)
 		uthr_lookup_symbol((void *)&readp, "read");
+
+	// Set the fd to non-blocking mode.
 	unix_set_fd_NONBLOCK(fd);
 
 	int save_errno = errno;
 	rc = readp(fd, buf, count);
-	if (rc == -1) {
+	// Check if read is successful.
+	if (rc < 0) {
 		if (errno == EWOULDBLOCK || errno == EAGAIN) {
+			// Block on fd for read operation.
 			errno = save_errno;
 			uthr_block_on_fd(fd, UTHR_OP_READ);
 		} else {
@@ -143,20 +155,25 @@ write(int fd, const void *buf, size_t count)
 	int rc;
 
 	// (Your code goes here.)
+
+	// Lookup the symbol for read.
 	if (writep == NULL)
 		uthr_lookup_symbol((void *)&writep, "write");
+
+	// Set the fd to non-blocking mode.
 	unix_set_fd_NONBLOCK(fd);
 
 	int save_errno = errno;
 	rc = writep(fd, buf, count);
-	if (rc == -1) {
+	// Check if write is successful.
+	if (rc < 0) {
 		if (errno == EWOULDBLOCK || errno == EAGAIN) {
+			// Block on fd for write operation.
 			errno = save_errno;
 			uthr_block_on_fd(fd, UTHR_OP_WRITE);
 		} else {
 			return -1;
 		}
 	}
-
 	return (rc);
 }

@@ -1,9 +1,17 @@
-If I were to implement “cooperative multithreading” instead of “preemptive multithreading” in my uthreads library implementation, 
-the main change would be removing the timer-based preemption, which means I would not have to call setitimer and handle SIGPROF signals.
+Cindy Nguyen (cn32)
+
+WRITEUP
+
+If I were to implement "cooperative multithreading" instead of "preemptive multithreading" in my uthreads library implementation, 
+the main change would be removing the timer-based preemption, which means I would not have to call setitimer and handle SIGPROF signals. 
 Since the scheduler would only run when a thread blocks, tields, or completes, I would no longer need signal-based context switching but 
-would instead have to explicitly call sched_yield to swap back into the scheduler and allow other threads in the run queue to be run 
+would instead have to explicitly call sched_yield() to swap back into the scheduler and allow other threads in the run queue to be run 
 (cannot rely on the preemptive timer to stop and switch threads anymore). This method reduces scheduling overhead and avoids race conditions 
-caused by arbitrary preemption, so there is no need to block and unblock SIGPROF signals in the scheduler and library functions.
+caused by arbitrary preemption, so there is no need to block and unblock SIGPROF signals in the scheduler and library functions. 
 However, it no longer guarantees that threads have fair, equal CPU time so if a thread does not yield, then it would monopolize CPU time 
 and starve the other threads. Managing the order of queues and ensuring that operations are blocked at the correct places become more crucial 
-in helping the scheduler maintain fairness.
+in helping the scheduler maintain fairness. With the current uthread implementation, the change I would make at minimum is removing the 
+swapcontext call in the function uthr_timer_handler(), to prevent SIGPROF signals from switching context from a running thread back to 
+the scheduler based on a predetermined timer duration. A more general change would be to remove all the context switching involving 
+SIGPROF signals, letting the other setcontext/swapcontext calls in the uthread functions such as uthr_block_on_fd(), pthread_exit(), and 
+sched_yield() manually switch between the threads and the scheduler.
