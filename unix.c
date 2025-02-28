@@ -49,8 +49,6 @@ socket(int domain, int type, int protocol)
 	s = socketp(domain, type, protocol);
 	if (s != -1) {
 		unix_set_fd_NONBLOCK(s);
-	} else {
-		errno = EAGAIN;
 	}
 
 	return (s);
@@ -77,11 +75,12 @@ accept(int s, struct sockaddr *addr, socklen_t *addrlen)
 	if (acceptp == NULL)
 		uthr_lookup_symbol((void *)&acceptp, "accept");
 	s_conn = acceptp(s, addr, addrlen);
-	if (s_conn != -1) {
-		unix_set_fd_NONBLOCK(s_conn);
-	} else {
-		errno = EAGAIN;
+	while (s_conn == -1) {
+		uthr_block_on_fd(s, UTHR_OP_READ);
+		unix_set_fd_NONBLOCK(s);
+		s_conn = acceptp(s, addr, addrlen);
 	}
+
 	return (s_conn);
 }
 
@@ -105,10 +104,10 @@ read(int fd, void *buf, size_t count)
 	if (readp == NULL)
 		uthr_lookup_symbol((void *)&readp, "read");
 	rc = readp(fd, buf, count);
-	if (rc != -1) {
-		unix_set_fd_NONBLOCK(fd);
-	} else if (errno == EAGAIN) {
+	while (rc == -1) {
 		uthr_block_on_fd(fd, UTHR_OP_READ);
+		unix_set_fd_NONBLOCK(fd);
+		rc = readp(fd, buf, count);
 	}
 	
 	return (rc);
@@ -134,10 +133,11 @@ write(int fd, const void *buf, size_t count)
 	if (writep == NULL)
 		uthr_lookup_symbol((void *)&writep, "write");
 	rc = writep(fd, buf, count);
-	if (rc != -1) {
-		unix_set_fd_NONBLOCK(fd);
-	} else if (errno == EAGAIN) {
+	
+	while (rc == -1) {
 		uthr_block_on_fd(fd, UTHR_OP_WRITE);
+		unix_set_fd_NONBLOCK(fd);
+		rc = writep(fd, buf, count);
 	}
 
 	return (rc);
