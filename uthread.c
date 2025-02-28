@@ -2,7 +2,7 @@
  * Cindy Nguyen (cn32)
  */
 
-#define _GNU_SOURCE	// Enable the use of RTLD_NEXT
+#define _GNU_SOURCE // Enable the use of RTLD_NEXT
 
 #include <sys/select.h>
 #include <sys/time.h>
@@ -24,32 +24,37 @@
 /**
  * This is the uthread stack size.
  */
-#define	UTHR_STACK_SIZE	(1 << 21)
+#define UTHR_STACK_SIZE (1 << 21)
 
 /**
  * These are the uthread stats.
  */
-enum uthr_state { UTHR_FREE = 0, UTHR_RUNNABLE, UTHR_BLOCKED, UTHR_JOINING,
-    UTHR_ZOMBIE };
+enum uthr_state {
+	UTHR_FREE = 0,
+	UTHR_RUNNABLE,
+	UTHR_BLOCKED,
+	UTHR_JOINING,
+	UTHR_ZOMBIE
+};
 
 /**
  * This is the maximum number of uthreads that a program can create.
  */
-#define	NUTHR	64
+#define NUTHR 64
 
 static struct uthr {
 	ucontext_t uctx;
-	char *stack_base;
+	char	  *stack_base;
 	void *(*start_routine)(void *restrict);
 	void *restrict argp;
-	void *ret_val;
+	void	       *ret_val;
 	enum uthr_state state;
-	struct uthr *prev;	// previous thread in the same queue
-	struct uthr *next;	// next thread in the same queue
-	struct uthr *joiner;
-	bool detached;
-	int fd;
-	enum uthr_op op;
+	struct uthr    *prev; // previous thread in the same queue
+	struct uthr    *next; // next thread in the same queue
+	struct uthr    *joiner;
+	bool		detached;
+	int		fd;
+	enum uthr_op	op;
 } uthr_array[NUTHR];
 
 /**
@@ -75,7 +80,7 @@ static ucontext_t sched_uctx;
  * it is preempted and moved to the tail of the run queue.
  */
 static const struct itimerval quantum = { { .tv_sec = 0, .tv_usec = 100000 },
-    { .tv_sec = 0, .tv_usec = 100000 } };
+	{ .tv_sec = 0, .tv_usec = 100000 } };
 
 /**
  * This is a set of signals with only SIGPROF set.  It should not change after
@@ -110,20 +115,25 @@ uthr_assert_SIGPROF_blocked(void)
 	assert(sigismember(&old_set, SIGPROF));
 }
 
+/**
+ * This function blocks the SIGPROF signals and saves the old signal set to
+ * old_setp.
+ */
 void
 uthr_block_SIGPROF(sigset_t *old_setp)
 {
 	// (Your code goes here.)
 	sigprocmask(SIG_BLOCK, &SIGPROF_set, old_setp);
-
 }
 
+/**
+ * This function sets the sigmask to setp.
+ */
 void
 uthr_set_sigmask(const sigset_t *setp)
 {
 	// (Your code goes here.)
 	sigprocmask(SIG_SETMASK, setp, NULL);
-	///Preserves errno.
 }
 
 void *
@@ -143,11 +153,12 @@ uthr_intern_free(void *ptr)
 /**
  * Remove the given thread from its current queue.
  */
-void 
-uthr_removeq(struct uthr *td) {
-	// printf("rem tryyyy: %ld\n", td - uthr_array);
+void
+uthr_removeq(struct uthr *td)
+{
 	if (td->prev != NULL && td->next != NULL) {
-		// printf("rem: %ld\n", td - uthr_array);
+		// Set the threads on either side of td in the queue to point to
+		// each other, and set prev and next to NULL.
 		(td->prev)->next = td->next;
 		(td->next)->prev = td->prev;
 		td->prev = NULL;
@@ -158,15 +169,11 @@ uthr_removeq(struct uthr *td) {
 /**
  * Insert the given thread to the end of the given queue.
  */
-void 
-uthr_insertq(struct uthr *td, struct uthr *queue) {
-	// if (queue == &runq)
-	// 	printf("insert runq: %ld\n", td - uthr_array);
-	// td->prev = queue->prev;
-	// td->next = queue;
-	// (td->prev)->next = td;
-	// queue->prev = td;
-
+void
+uthr_insertq(struct uthr *td, struct uthr *queue)
+{
+	// Set the threads on either side of td in the queue to point to td,
+	// and set prev and next to point to them.
 	struct uthr *old_tail = queue->prev;
 	old_tail->next = td;
 	queue->prev = td;
@@ -191,39 +198,24 @@ uthr_to_zombie(struct uthr *td)
 	assert(td->state == UTHR_RUNNABLE);
 	if (td->joiner != NULL) {
 		assert(!td->detached);
-                assert(td->joiner->state == UTHR_JOINING);
+		assert(td->joiner->state == UTHR_JOINING);
 	}
 
 	// (Your code goes here.)
 	// Remove the thread from runq.
-	// struct uthr *runq_prev = td->prev;
-	// struct uthr *runq_next = td->next;
-	// runq_prev->next = runq_next;
-	// runq_next->prev = runq_prev;
 	uthr_removeq(td);
-	
+
 	// Change the state to zombie.
 	td->state = UTHR_ZOMBIE;
 	if (td->joiner != NULL) {
 		struct uthr *joiner = td->joiner;
-
-		// printf("in joiner\n");
 		joiner->state = UTHR_RUNNABLE;
 		// Insert joiner into runq.
-		// joiner->prev = runq.prev;
-		// joiner->next = &runq;
-		// (joiner->prev)->next = joiner;
-		// runq.prev = joiner;
 		uthr_insertq(joiner, &runq);
 	} else if (td->detached) {
 		// Insert thread into reapq.
-		// td->prev = reapq.prev;
-		// td->next = &reapq;
-		// (td->prev)->next = td;
-		// reapq.prev = td;
 		uthr_insertq(td, &reapq);
 	}
-	
 }
 
 /**
@@ -246,22 +238,12 @@ uthr_to_free(struct uthr *td)
 	// Free thread's stack.
 	uthr_intern_free(td->stack_base);
 	td->stack_base = NULL;
-	
-	// Move thread from reapq to freeq.
-	// struct uthr *reapq_prev = td->prev;
-	// struct uthr *reapq_next = td->next;
-	// reapq_prev->next = reapq_next;
-	// reapq_next->prev = reapq_prev;
-	// td->prev = freeq.prev;
-	// td->next = &freeq;
-	// (td->prev)->next = td;
-	// freeq.prev = td;
-	// uthr_removeq(td);
+
+	// Insert thread into freeq.
 	uthr_insertq(td, &freeq);
 
 	// Change thread's state to free.
 	td->state = UTHR_FREE;
-
 }
 
 /**
@@ -294,22 +276,15 @@ uthr_start(int tidx)
 	assert(sigismember(&old_set, SIGPROF));
 
 	// (Your code goes here.)
-	// Call the thread's start routine, saves return value in the thread structure.
+	// Call the thread's start routine, saves return value in the thread
+	// structure.
 	td->ret_val = td->start_routine(td->argp);
-	
+
 	// Restores the original signal mask.
 	uthr_set_sigmask(&old_set);
 
-	// Change state to zombie.
-	//td->state = UTHR_ZOMBIE;
-	
+	// Call exit on the return value of td.
 	pthread_exit(td->ret_val);
-	// curr_uthr->ret_val = td->ret_val;
-	// uthr_to_zombie(td);
-
-	// Swap context back to scheduler.
-	///swapcontext(&td->uctx, &sched_uctx);
-
 }
 
 int
@@ -324,48 +299,38 @@ pthread_create(pthread_t *restrict tidp, const pthread_attr_t *restrict attrp,
 		uthr_set_sigmask(&old_set);
 		return ENOTSUP;
 	}
-	
-	//Take a thread from freeq and move it to runq.
+
+	// Take a thread from freeq and move it to runq.
 	struct uthr *td = freeq.next;
 	if (td == &freeq) {
-		// printf("eag 1\n");
 		uthr_set_sigmask(&old_set);
 		return EAGAIN;
 	}
-	
 
-	//Create stack_base, initialize ucontext, set start_routine & argp, state = Runnable, detached = 0.
+	// Create stack_base, initialize ucontext, set start_routine & argp,
+	// state = Runnable, detached = 0.
 	td->stack_base = uthr_intern_malloc(UTHR_STACK_SIZE);
 	if (td->stack_base == NULL) {
 		uthr_set_sigmask(&old_set);
 		return EAGAIN;
 	}
 
-	// struct uthr *freeq_prev = td->prev;
-	// struct uthr *freeq_next = td->next;
-	// freeq_prev->next = freeq_next;
-	// freeq_next->prev = freeq_prev;
+	// Move td to runq.
 	uthr_removeq(td);
-	// td->prev = runq.prev;
-	// td->next = &runq;
-	// (td->prev)->next = td;
-	// runq.prev = td;
 	uthr_insertq(td, &runq);
 
-	// ucontext_t new_uctx;
-
+	// Initialize the context of td.
 	getcontext(&td->uctx);
 	td->uctx.uc_stack.ss_sp = td->stack_base;
 	td->uctx.uc_stack.ss_size = UTHR_STACK_SIZE;
-	// td->uctx.uc_link = &sched_uctx;
-	makecontext(&td->uctx, (void(*)())uthr_start, 1, td - uthr_array);
+	makecontext(&td->uctx, (void (*)())uthr_start, 1, td - uthr_array);
 
+	// Initialize the other fields of td.
 	td->start_routine = start_routine;
 	td->argp = argp;
 	td->state = UTHR_RUNNABLE;
 	td->joiner = NULL;
 	td->detached = false;
-	// td->ret_val = NULL;
 	td->op = UTHR_OP_NOP;
 	td->fd = -1;
 
@@ -373,10 +338,6 @@ pthread_create(pthread_t *restrict tidp, const pthread_attr_t *restrict attrp,
 	*tidp = td - uthr_array;
 
 	uthr_set_sigmask(&old_set);
-
-	// Call uthr_start.
-	///uthr_start(td - uthr_array);
-	///swapcontext(&curr_uthr->uctx, &new_uctx);
 
 	return (0);
 }
@@ -388,6 +349,8 @@ pthread_detach(pthread_t tid)
 	uthr_block_SIGPROF(&old_set);
 
 	// (Your code goes here.)
+
+	// Check the errors ESRCH and EINVAL.
 	if (tid >= NUTHR || uthr_array[tid].state == UTHR_FREE) {
 		uthr_set_sigmask(&old_set);
 		return ESRCH;
@@ -414,34 +377,29 @@ void
 pthread_exit(void *retval)
 {
 	// (Your code goes here.)
-	
+
 	// Block SIGPROF.
 	sigset_t old_set;
 	uthr_block_SIGPROF(&old_set);
 
 	// Set current thread's return value to input retval.
-	///(void)retval;
-	///retval = curr_uthr->ret_val;
 	curr_uthr->ret_val = retval;
 
 	// Changes current thread to zombie.
 	uthr_to_zombie(curr_uthr);
 
-	// Swap context back to scheduler.
+	// Set context to scheduler.
 	if (setcontext(&sched_uctx) == -1) {
 		uthr_exit_errno("setcontext");
 	}
-	///swapcontext(&curr_uthr->uctx, &sched_uctx);
-
-	///maybe put before swap
-	///uthr_set_sigmask(&old_set);
 
 	/*
 	 * Since pthread_exit is declared as a function that never
 	 * returns, the compiler requires us to ensure that the
 	 * function's implementation never returns.
 	 */
-	for (;;);
+	for (;;)
+		;
 }
 
 int
@@ -449,54 +407,43 @@ pthread_join(pthread_t tid, void **retval)
 {
 	// (Your code goes here.)
 	sigset_t old_set;
-    uthr_block_SIGPROF(&old_set);
+	uthr_block_SIGPROF(&old_set);
 
-	//printf("b4 err\n");
-
-	//|| uthr_array[tid].joiner == curr_uthr
-
+	// Check for errors ESRCH, EINVAL, EDEADLK.
 	if (tid >= NUTHR) {
-		//printf("err1\n");
 		uthr_set_sigmask(&old_set);
 		return ESRCH;
 	}
 	if (uthr_array[tid].state == UTHR_FREE) {
-		//printf("err1\n");
 		uthr_set_sigmask(&old_set);
 		return ESRCH;
 	}
 
 	if (uthr_array[tid].detached) {
-		//printf("err2\n");
 		uthr_set_sigmask(&old_set);
 		return EINVAL;
 	}
 	if (uthr_array[tid].joiner != NULL) {
-		//printf("err2\n");
 		uthr_set_sigmask(&old_set);
 		return EINVAL;
 	}
 
 	if (&uthr_array[tid] == curr_uthr) {
-		//printf("err3\n");
 		uthr_set_sigmask(&old_set);
 		return EDEADLK;
 	}
-	if ((uthr_array[tid].state == UTHR_JOINING) && (curr_uthr->joiner == &uthr_array[tid])) {
-		//printf("err3\n");
+	if ((uthr_array[tid].state == UTHR_JOINING) &&
+	    (curr_uthr->joiner == &uthr_array[tid])) {
 		uthr_set_sigmask(&old_set);
 		return EDEADLK;
 	}
 
-	//printf("no err\n");
-		
-
-	// 2 cases: tid's state is Zombie or not.	
-	if (uthr_array[tid].state != UTHR_ZOMBIE) {	
-		// printf("before swap\n");
+	// There are 2 cases, whether tid's state is Zombie or not.
+	if (uthr_array[tid].state != UTHR_ZOMBIE) {
 		uthr_array[tid].joiner = curr_uthr;
 
-		// Change state from Runnable to Joining. Remove curr_uthr from runq.
+		// Change state from Runnable to Joining. Remove curr_uthr from
+		// runq.
 		curr_uthr->state = UTHR_JOINING;
 		uthr_removeq(curr_uthr);
 
@@ -505,18 +452,15 @@ pthread_join(pthread_t tid, void **retval)
 			uthr_exit_errno("swapcontext");
 		}
 	}
-	//printf("mid\n");
-	// if (uthr_array[tid].state == UTHR_ZOMBIE) {
-		// printf("in zomb\n");
-		// Save child thread's return value, and reap the child thread.
-		// (void)retval;
-		if (retval != NULL) {
-			*retval = uthr_array[tid].ret_val;
-			//printf("before retval\n");
-			//printf("retval: %p\n", *retval);
-		}
-		uthr_to_free(&uthr_array[tid]);
-	// }
+
+	// If the retval double pointer is not NULL, assign the thread's ret_val
+	// to it.
+	if (retval != NULL) {
+		*retval = uthr_array[tid].ret_val;
+	}
+
+	// Free the thread.
+	uthr_to_free(&uthr_array[tid]);
 
 	uthr_set_sigmask(&old_set);
 
@@ -527,17 +471,12 @@ int
 sched_yield(void)
 {
 	// (Your code goes here.)
-	
-	// Causes the calling thread to relinquish the CPU. 
+
+	// Causes the calling thread to relinquish the CPU.
 	// The thread is moved to the end of the queue for its static
 	// priority and a new thread gets to run.
-
 	sigset_t old_set;
-    uthr_block_SIGPROF(&old_set);
-
-	///use curr_uthr???
-	///uthr_removeq(curr_uthr);
-	///uthr_insertq(curr_uthr, &runq);
+	uthr_block_SIGPROF(&old_set);
 
 	// Swap context to the scheduler.
 	if (swapcontext(&curr_uthr->uctx, &sched_uctx) == -1) {
@@ -550,7 +489,7 @@ sched_yield(void)
 }
 
 static struct fd_state {
-	int maxfd;
+	int    maxfd;
 	fd_set read_set;
 	fd_set write_set;
 	struct {
@@ -587,14 +526,14 @@ uthr_block_on_fd(int fd, enum uthr_op op)
 	// (Your code goes here.)
 
 	sigset_t old_set;
-    uthr_block_SIGPROF(&old_set);
+	uthr_block_SIGPROF(&old_set);
 
+	// Update maxfd to the largest current fd.
 	if (fd > fd_state.maxfd) {
 		fd_state.maxfd = fd;
 	}
-	
-	// Update calling thread's fd and op.
-	///use curr_uthr???
+
+	// Update the calling thread's fd and op.
 	struct uthr *td = curr_uthr;
 	td->fd = fd;
 	td->op = op;
@@ -605,20 +544,20 @@ uthr_block_on_fd(int fd, enum uthr_op op)
 	td->state = UTHR_BLOCKED;
 
 	if (td->op == UTHR_OP_READ) {
-		// If op is read, update fd_state that a thread is now blocked reading on fd.
+		// If op is read, update fd_state that a thread is now blocked
+		// reading on fd.
 		if (fd_state.blocked[fd].readers == 0) {
-			FD_SET(fd, &fd_state.read_set);			
+			FD_SET(fd, &fd_state.read_set);
 		}
 		fd_state.blocked[fd].readers += 1;
 	} else {
-		// If op is write, update fd_state that a thread is now blocked writing on fd.
+		// If op is write, update fd_state that a thread is now blocked
+		// writing on fd.
 		if (fd_state.blocked[fd].writers == 0) {
 			FD_SET(fd, &fd_state.write_set);
 		}
 		fd_state.blocked[fd].writers += 1;
 	}
-
-	
 
 	// Swap context back to scheduler.
 	if (swapcontext(&curr_uthr->uctx, &sched_uctx) == -1) {
@@ -626,7 +565,6 @@ uthr_block_on_fd(int fd, enum uthr_op op)
 	}
 
 	uthr_set_sigmask(&old_set);
-
 }
 
 /**
@@ -652,41 +590,50 @@ uthr_check_blocked(bool wait)
 	// Copy file descriptor sets.
 	fd_set ready_for_read = fd_state.read_set;
 	fd_set ready_for_write = fd_state.write_set;
-	
-	// Will not block because of 0 timeout.
-	
-	int nready = select(fd_state.maxfd + 1, &ready_for_read, &ready_for_write, NULL, timeoutp);
-	
-	// If nready > 0, figure out which file descriptors are ready and unblock appropriate threads.
-	// Note that a thread can only ever be blocked on one file descriptor at a time.
+
+	// Call select on the ready to read and write sets with the appropriate
+	// timeout.
+	int nready = select(fd_state.maxfd + 1, &ready_for_read,
+	    &ready_for_write, NULL, timeoutp);
+
+	// If nready > 0, figure out which file descriptors are ready and
+	// unblock appropriate threads. Note that a thread can only ever be
+	// blocked on one file descriptor at a time.
 	struct uthr *head = &blockedq;
 	struct uthr *curr = blockedq.next;
 	if (nready < 0) {
-		while(curr != head) {
+		while (curr != head) {
 			if (curr->state == UTHR_BLOCKED) {
-				if ((FD_ISSET(curr->fd, &ready_for_read) && curr->op == UTHR_OP_READ) || (FD_ISSET(curr->fd, &ready_for_write) && curr->op == UTHR_OP_WRITE)) {
-					// Change state, add to runq, remove from blockedq.
+				if ((FD_ISSET(curr->fd, &ready_for_read) &&
+					curr->op == UTHR_OP_READ) ||
+				    (FD_ISSET(curr->fd, &ready_for_write) &&
+					curr->op == UTHR_OP_WRITE)) {
+					// Change state to Runnable, remove from
+					// blockedq, add to runq.
 					curr->state = UTHR_RUNNABLE;
-					struct uthr *blocked_prev = curr->prev;
+					uthr_removeq(curr);
+					uthr_insertq(curr, &runq);
 					struct uthr *blocked_next = curr->next;
-					blocked_prev->next = blocked_next;
-					blocked_next->prev = blocked_prev;
-					curr->prev = runq.prev;
-					curr->next = &runq;
-					(curr->prev)->next = curr;
-					runq.prev = curr;
-					///Inser & Remove!
-					
-					// Decrement readers/writers, if that int gets to 0 then FD_CLR that fd from read_set/write_set.
-					if(curr->op == UTHR_OP_READ) {
-						fd_state.blocked[curr->fd].readers -= 1;
-						if(fd_state.blocked[curr->fd].readers == 0) {
-							FD_CLR(curr->fd, &fd_state.read_set);
+
+					// Decrement readers/writers, if that
+					// int gets to 0 then FD_CLR that fd
+					// from read_set/write_set.
+					if (curr->op == UTHR_OP_READ) {
+						fd_state.blocked[curr->fd]
+						    .readers -= 1;
+						if (fd_state.blocked[curr->fd]
+							.readers == 0) {
+							FD_CLR(curr->fd,
+							    &fd_state.read_set);
 						}
 					} else if (curr->op == UTHR_OP_WRITE) {
-						fd_state.blocked[curr->fd].writers -= 1;
-						if(fd_state.blocked[curr->fd].writers == 0) {
-							FD_CLR(curr->fd, &fd_state.write_set);
+						fd_state.blocked[curr->fd]
+						    .writers -= 1;
+						if (fd_state.blocked[curr->fd]
+							.writers == 0) {
+							FD_CLR(curr->fd,
+							    &fd_state
+								 .write_set);
 						}
 					}
 
@@ -697,8 +644,7 @@ uthr_check_blocked(bool wait)
 				}
 			}
 		}
-	}			
-
+	}
 }
 
 /**
@@ -718,18 +664,6 @@ uthr_scheduler(void)
 {
 	uthr_assert_SIGPROF_blocked();
 	for (;;) {
-
-		// struct uthr *runq_curr = runq.next;
-		// for (int i = 0; i < 5; i++) {
-		// 	if (runq_curr == NULL) {
-		// 		printf("runq curr is null: %ld\n", runq_curr - uthr_array);
-		// 	}
-		// 	struct uthr *runq_next = runq_curr->next;
-		// 	printf("in runq: %ld\n", runq_curr - uthr_array);
-		// 	runq_curr = runq_next;
-		// }
-
-		// printf("before if: %d\n", uthr_array[1].state);
 		// (Your code goes here.)
 		// Check if runq is not empty.
 		if (runq.next != &runq) {
@@ -737,54 +671,30 @@ uthr_scheduler(void)
 			if (setitimer(ITIMER_PROF, &quantum, NULL) < 0) {
 				uthr_exit_errno("setitimer");
 			}
-			
-			// Set curr_uthr to the first thread in runq. Run that thread by resuming its ucontext.
-			///struct uthr *old_uthr = &curr_uthr;
-			
-			// printf("running %ld\n", curr_uthr - uthr_array);
-			curr_uthr = runq.next;
-			/// uthr_removeq(curr_uthr);
 
-			/// if ((curr_uthr - uthr_array) != 0)
-			/// 	printf("running %ld\n", curr_uthr - uthr_array);
-			
+			// Set curr_uthr to the first thread in runq. Run that
+			// thread by resuming its ucontext.
+			curr_uthr = runq.next;
+
 			if (swapcontext(&sched_uctx, &curr_uthr->uctx) < 0) {
 				uthr_exit_errno("swapcontext");
 			}
 
-			// sigset_t old_set;
-
-			// if (sigismember(&old_set, SIGPROF)) {
-			// 	printf("yes\n");
-			// } else {
-			// 	printf("no\n");
-			// }
-
-    		// uthr_block_SIGPROF(&old_set);
-			// printf("aft swap\n");
-
-			// When scheduler is resumed, check if curr_uthr is still in Runnable state.
+			// When scheduler is resumed, check if curr_uthr is
+			// still in Runnable state.
 			if (curr_uthr->state == UTHR_RUNNABLE) {
-				// Move unblocked threads to runq, and move curr_uthr to end of runq.
+				// Move unblocked threads to runq, and move
+				// curr_uthr to end of runq.
 				uthr_check_blocked(false);
 				uthr_removeq(curr_uthr);
 				uthr_insertq(curr_uthr, &runq);
-				// printf("runna\n");
 			}
 
-			// printf("aft runna\n");
-
-			///uthr_set_sigmask(&old_set);
-
 		} else {
-			// If runq is empty, wait for a Blocked thread to become Runnable.
-			// printf("before cb true\n");
+			// If runq is empty, wait for a Blocked thread to become
+			// Runnable.
 			uthr_check_blocked(true);
-			// printf("aft cb true\n");
 		}
-		
-		
-		// printf("before while\n");
 
 		// Free all threads in reapq.
 		struct uthr *reapq_curr = reapq.next;
@@ -794,12 +704,7 @@ uthr_scheduler(void)
 			uthr_to_free(reapq_curr);
 			reapq_curr = reapq_next;
 		}
-
-		// printf("aft while\n");
-
 	}
-
-	///a lot of swap_context, some make_context? Don't have to get&make again after
 }
 
 /**
@@ -827,7 +732,7 @@ uthr_timer_handler(int signum)
  * This function is automatically called before the main function is executed,
  * due to the __attribute__((constructor)) attribute.  It performs the following
  * initialization tasks:
- * 
+ *
  * - Initializes the SIGPROF signal set.
  * - Looks up the symbols for malloc and free functions.
  * - Sets up the scheduler context.
@@ -840,8 +745,7 @@ uthr_timer_handler(int signum)
  * If any of the initialization steps fail, the function will call
  * uthr_exit_errno() to terminate the program with an error message.
  */
-__attribute__((constructor))
-static void
+__attribute__((constructor)) static void
 uthr_init(void)
 {
 	static char sched_stack[UTHR_STACK_SIZE];
@@ -850,6 +754,7 @@ uthr_init(void)
 	 * SIGPROF_set must be initialized before calling uthr_lookup_symbol().
 	 */
 	// (Your code goes here.)
+	// Initialize the SIGPROF signal set.
 	if (sigemptyset(&SIGPROF_set) == -1)
 		uthr_exit_errno("sigempty");
 	if (sigaddset(&SIGPROF_set, SIGPROF) == -1)
@@ -871,9 +776,9 @@ uthr_init(void)
 	sched_uctx.uc_stack.ss_size = UTHR_STACK_SIZE;
 	sched_uctx.uc_link = NULL;
 	sched_uctx.uc_sigmask = SIGPROF_set;
-	makecontext(&sched_uctx, (void(*)())uthr_scheduler, 0);
+	makecontext(&sched_uctx, (void (*)())uthr_scheduler, 0);
 
-	// Note: For all 4 queues, set prev and next struct entries to itself.
+	// For all 4 queues, set prev and next struct entries to itself.
 	runq.prev = &runq;
 	runq.next = &runq;
 	blockedq.prev = &blockedq;
@@ -890,7 +795,7 @@ uthr_init(void)
 	curr_uthr = &uthr_array[0];
 	curr_uthr->state = UTHR_RUNNABLE;
 	// (Your code goes here.)
-	uthr_insertq(curr_uthr, &runq);	
+	uthr_insertq(curr_uthr, &runq);
 
 	/*
 	 * Initialize the queue of free threads.  Skip zero, which is already
@@ -901,36 +806,28 @@ uthr_init(void)
 		uthr_insertq(&uthr_array[i], &freeq);
 		uthr_array[i].state = UTHR_FREE;
 	}
-	 
+
 	uthr_init_fd_state();
 
 	/*
 	 * Set up the SIGPROF signal handler.
 	 */
 	// (Your code goes here.)
-	///create a new struct sigaction???
+	// Create and initialize a new struct sigaction.
 	struct sigaction action;
 	action.sa_handler = uthr_timer_handler;
 	action.sa_flags = SA_RESTART;
 	action.sa_mask = SIGPROF_set;
-	// if (sigemptyset(&action.sa_mask) < 0)
-	// 	uthr_exit_errno("sigemptyset error");
-	///need to block any other signals? sigaddset(&action.sa_mask, SIGCHLD)
 	if (sigaction(SIGPROF, &action, NULL) < 0)
 		uthr_exit_errno("sigaction error");
-	
+
 	/*
 	 * Configure the interval timer for thread scheduling.
 	 */
 	// (Your code goes here.)
-	///anything else??? Error check
 	setitimer(ITIMER_PROF, &quantum, NULL);
 
-
-	///setcontext(&sched_uctx);
-
 	uthr_set_sigmask(&old_set);
-
 }
 
 void
@@ -952,8 +849,9 @@ uthr_lookup_symbol(void **addrp, const char *symbol)
 		 * See the manual page for dlopen().
 		 */
 		// (Your code goes here.)
-		
-		///dlsym and dlerror to look up and return the specified symbol’s address.
+
+		// dlsym and dlerror used to look up and return the specified
+		// symbol’s address.
 		dlerror();
 		*addrp = dlsym(RTLD_NEXT, symbol);
 		char *error = dlerror();

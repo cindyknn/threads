@@ -20,7 +20,7 @@ unix_set_fd_NONBLOCK(int fd)
 {
 	// (Your code goes here.)
 	// Sets fd to non-blocking mode.
-	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK );
+	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
 	// int err = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK );
 	// Error checking.
 	// if (err == -1) {
@@ -42,7 +42,7 @@ int
 socket(int domain, int type, int protocol)
 {
 	static int (*socketp)(int, int, int);
-        int s;
+	int s;
 
 	if (socketp == NULL)
 		uthr_lookup_symbol((void *)&socketp, "socket");
@@ -74,11 +74,19 @@ accept(int s, struct sockaddr *addr, socklen_t *addrlen)
 	// (Your code goes here.)
 	if (acceptp == NULL)
 		uthr_lookup_symbol((void *)&acceptp, "accept");
-	s_conn = acceptp(s, addr, addrlen);
-	while (s_conn == -1) {
-		uthr_block_on_fd(s, UTHR_OP_READ);
-		unix_set_fd_NONBLOCK(s);
+	unix_set_fd_NONBLOCK(s);
+
+	for (;;) {
+		int save_errno = errno;
 		s_conn = acceptp(s, addr, addrlen);
+		if (s_conn == -1) {
+			if (errno == EWOULDBLOCK || errno == EAGAIN) {
+				errno = save_errno;
+				uthr_block_on_fd(s, UTHR_OP_READ);
+			} else {
+				return -1;
+			}
+		}
 	}
 
 	return (s_conn);
@@ -103,13 +111,18 @@ read(int fd, void *buf, size_t count)
 	// (Your code goes here.)
 	if (readp == NULL)
 		uthr_lookup_symbol((void *)&readp, "read");
+	unix_set_fd_NONBLOCK(fd);
+
+	int save_errno = errno;
 	rc = readp(fd, buf, count);
-	while (rc == -1) {
-		uthr_block_on_fd(fd, UTHR_OP_READ);
-		unix_set_fd_NONBLOCK(fd);
-		rc = readp(fd, buf, count);
+	if (rc == -1) {
+		if (errno == EWOULDBLOCK || errno == EAGAIN) {
+			errno = save_errno;
+			uthr_block_on_fd(fd, UTHR_OP_READ);
+		} else {
+			return -1;
+		}
 	}
-	
 	return (rc);
 }
 
@@ -132,12 +145,17 @@ write(int fd, const void *buf, size_t count)
 	// (Your code goes here.)
 	if (writep == NULL)
 		uthr_lookup_symbol((void *)&writep, "write");
+	unix_set_fd_NONBLOCK(fd);
+
+	int save_errno = errno;
 	rc = writep(fd, buf, count);
-	
-	while (rc == -1) {
-		uthr_block_on_fd(fd, UTHR_OP_WRITE);
-		unix_set_fd_NONBLOCK(fd);
-		rc = writep(fd, buf, count);
+	if (rc == -1) {
+		if (errno == EWOULDBLOCK || errno == EAGAIN) {
+			errno = save_errno;
+			uthr_block_on_fd(fd, UTHR_OP_WRITE);
+		} else {
+			return -1;
+		}
 	}
 
 	return (rc);
